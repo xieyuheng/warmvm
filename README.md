@@ -107,3 +107,24 @@ warmvm 比 Python 快 2.2×、比 Ruby 快 1.7×，与 Lua 5.4 相当，慢于 J
 interaction nets 重写负载同样**完全驻留 L1**（缺失率 ~0.00002%），
 且吞吐超过 10 亿条 VM 指令/秒。规则/驱动/队列/自由表全部在 VM 内，
 宿主只负责搬运内存。
+
+## 多 warmvm 并行验证（inet-par.asm / par-run.c）
+
+两个 warmvm 各占一个线程，完整演示"空间压力 → 导出 → 宿主搬运 → 导入 → 并行归约"：
+
+1. **VM0**（entry=main）：构建 64 叶加法树 T1（agent 区），同时把 T2 直接以**序列化形式**构建在导出缓冲（0x6000，真实的空间压力：两棵树共 384 agents 超出单 VM 容量 276）→ halt(EXPORT)
+2. **宿主**：把 3336 字节 bundle（192 agents + 63 活跃对 + 端口重映射信息）memcpy 到 VM1 的导入区
+3. **并行阶段**（两线程同时）：VM0 归约 T1，VM1 导入 T2 并归约
+4. 结果：count0 + count1 = 64 + 64 = **128 ✓**
+
+```
+VM0 build+export: n=192 pairs=63 (0.11 ms)
+bundle copied: 3336 bytes
+VM0 (reduce T1): count=64  L1d miss=4 L1i miss=4
+VM1 (import T2): count=64  L1d miss=6 L1i miss=6
+total: 128 (expect 128) OK
+```
+
+bundle 格式：`[n][pn][pairs...][records...]`，本地索引 1-based（0 = 无连线）。
+导入端：pass-1 分配 + map 重映射，pass-2 端口 remap（`(map[v>>4-1]<<4)|(v&15)`），
+pairs 入队 → 驱动循环。规则/驱动/队列/自由表全部在 VM 内，宿主只做一次 memcpy。

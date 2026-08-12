@@ -29,3 +29,10 @@ inet-run.exe: inet-run.c wvm.c wvm.h
 
 inet-runbench.exe: inet-run.c wvm.c wvm.h
 	$(CC) $(CFLAGS) -DWVM_STATS -o $@ inet-run.c wvm.c
+
+# ---- 并行验证 ----
+inet-par.wvm: inet-par.asm warmasm.py
+	python3 warmasm.py -o inet-par.wvm inet-par.asm
+
+par-run.exe: par-run.c wvm.c wvm.h
+	$(CC) $(CFLAGS) -pthread -o $@ par-run.c wvm.c

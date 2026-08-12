@@ -374,16 +374,18 @@ rule_add_add1:
     lit16 8
     add
     store              ; mem[D+8] = x
-    ; 4a. mem[D+12] = C<<4  (D.result <-> C.prev)
+    ; 4a. mem[D+12] = (C<<4)|1  (D.result <-> C.prev)  (D.result <-> C.prev)
     lit16 SCR+20
     load
     lit8 4
     shl
+    lit8 1
+    or
     lit16 SCR+24
     load
     lit16 12
     add
-    store              ; mem[D+12] = C4
+    store              ; mem[D+12] = (C<<4)|1
     ; 4b. mem[C+8] = (D<<4)|2
     lit16 SCR+24
     load

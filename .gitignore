@@ -6,3 +6,4 @@ fib.wvm
 bench/fib40_c_O0
 bench/fib40_c_O2
 inet.wvm
+inet-par.wvm

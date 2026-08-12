@@ -103,6 +103,8 @@ def peephole(lines):
 def main():
     argv = sys.argv[1:]
     out = None
+    show_symbols = '--symbols' in argv
+    argv = [a for a in argv if a != '--symbols']
     if '-o' in argv:
         i = argv.index('-o'); out = argv[i + 1]; del argv[i:i + 2]
     if not argv:
@@ -136,6 +138,10 @@ def main():
     code_base = sp0
     code_size = off
     entry = code_base + labels[entry_name]
+
+    if show_symbols:
+        for name, o in sorted(labels.items(), key=lambda kv: kv[1]):
+            print(f"{name} 0x{code_base + o:04x}")
 
     # 第二遍：发射
     code = bytearray()
