@@ -53,6 +53,21 @@ def insn_size(op):
 def parse_int(tok):
     return int(tok, 0)
 
+def resolve_operand(tok, eqs, labels, code_base):
+    """操作数解析：.eq 常量 > 标签（代码地址）> 整数；支持 + - * 表达式"""
+    tok = tok.strip()
+    if tok in eqs:
+        return eqs[tok]
+    if tok in labels:
+        return code_base + labels[tok]
+    # 表达式：先把 .eq 名替换为值，再安全求值
+    expr = tok
+    for k, v in sorted(eqs.items(), key=lambda kv: -len(kv[0])):
+        expr = expr.replace(k, str(v))
+    if all(c in '0123456789abcdefxABCDEFX+-* ()' for c in expr):
+        return int(eval(expr, {'__builtins__': {}}))
+    return int(tok, 0)
+
 
 def peephole(lines):
     """基本块内的指令融合（不跨标签）：
@@ -97,13 +112,18 @@ def main():
     lines = peephole(parse(src))
     sp0 = 0x1000
     entry_name = None
-    # 第一遍：标签 → 代码区偏移；算代码长度
+    # 第一遍：收集 .eq；标签 → 代码区偏移；算代码长度
     labels, off = {}, 0
+    eqs = {}
     for kind, name, args in lines:
         if kind == 'label':
+            if name in labels:
+                sys.exit(f'重复标签: {name}')
             labels[name] = off
         else:
-            if name == '.sp0':
+            if name == '.eq':
+                eqs[args[0]] = parse_int(args[1])
+            elif name == '.sp0':
                 sp0 = parse_int(args[0])
             elif name == '.entry':
                 entry_name = args[0]
@@ -122,16 +142,16 @@ def main():
     for kind, name, args in lines:
         if kind == 'label':
             continue
-        if name in ('.sp0', '.entry'):
+        if name in ('.sp0', '.entry', '.eq'):
             continue
         op = OPS[name]
         code.append(op)
         if name in LIT_N:
-            v = parse_int(args[0])
+            v = resolve_operand(args[0], eqs, labels, code_base)
             code += int(v).to_bytes(LIT_N[name], 'little', signed=True)
         elif name in BR_N:
-            t = labels[args[0]] if args[0] in labels else parse_int(args[0])
-            code += (code_base + t).to_bytes(2, 'little')
+            t = resolve_operand(args[0], eqs, labels, code_base)
+            code += t.to_bytes(2, 'little')
 
     hdr = struct.pack('<HHHHHHHH',
                       WVM_MAGIC := 0x4D57, entry, 0x0080, sp0,

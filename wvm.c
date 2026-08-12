@@ -116,7 +116,7 @@ H_DROP:  { POP(); goto FETCH_D; }
 H_SWAP:  { uint32_t a = POP(); uint32_t b = POP(); PUSH(a); PUSH(b); goto FETCH_D; }
 H_OVER:  { uint32_t a = POP(); uint32_t b = POP(); PUSH(b); PUSH(a); PUSH(b); goto FETCH_D; }
 H_ROT:   { uint32_t a = POP(); uint32_t b = POP(); uint32_t c = POP();
-           PUSH(b); PUSH(c); PUSH(a); goto FETCH_D; }
+           PUSH(b); PUSH(a); PUSH(c); goto FETCH_D; }
 H_ADD:   BINOP(+);  goto FETCH_D;
 H_SUB:   BINOP(-);  goto FETCH_D;
 H_MUL:   BINOP(*);  goto FETCH_D;

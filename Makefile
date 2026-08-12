@@ -19,3 +19,13 @@ clean:
 	rm -f wvm.exe wvmbench.exe wvmbench-safe.exe fib.wvm
 
 .PHONY: all clean
+
+# ---- interaction nets 验证 ----
+inet.wvm: inet.asm warmasm.py
+	python3 warmasm.py -o inet.wvm inet.asm
+
+inet-run.exe: inet-run.c wvm.c wvm.h
+	$(CC) $(CFLAGS) -o $@ inet-run.c wvm.c
+
+inet-runbench.exe: inet-run.c wvm.c wvm.h
+	$(CC) $(CFLAGS) -DWVM_STATS -o $@ inet-run.c wvm.c
