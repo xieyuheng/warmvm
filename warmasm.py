@@ -23,8 +23,11 @@ OPS = {
     'load16': 0x1E, 'store16': 0x1F,
     'jmp': 0x20, 'jz': 0x21, 'jnz': 0x22, 'call': 0x23,
     'ret': 0x24, 'jmpx': 0x25, 'callx': 0x26,
+    # 融合指令（peephole 生成）
+    'dec': 0x27, 'duple': 0x28, 'subk': 0x29,
 }
-LIT_N = {'lit8': 1, 'lit16': 2, 'lit32': 4}   # 立即数字节数
+LIT_N = {'lit8': 1, 'lit16': 2, 'lit32': 4,
+         'duple': 1, 'subk': 1}   # 立即数字节数
 BR_N = {'jmp': 2, 'jz': 2, 'jnz': 2, 'call': 2}  # 目标字节数
 
 def parse(path):
@@ -50,6 +53,38 @@ def insn_size(op):
 def parse_int(tok):
     return int(tok, 0)
 
+
+def peephole(lines):
+    """基本块内的指令融合（不跨标签）：
+      dup lit8 k le  -> duple k
+      lit8 1 sub     -> dec
+      lit8 k sub     -> subk k
+    """
+    out = []
+    i, n = 0, len(lines)
+    while i < n:
+        kind, name, args = lines[i]
+        if kind == 'label':
+            out.append(lines[i]); i += 1; continue
+        if name == 'dup' and i + 2 < n:
+            n2, n3 = lines[i + 1], lines[i + 2]
+            if n2[0] == 'insn' and n2[1] == 'lit8' and n3[0] == 'insn' and n3[1] == 'le':
+                k = parse_int(n2[2][0])
+                if -128 <= k <= 127:
+                    out.append(('insn', 'duple', [str(k)])); i += 3; continue
+        if name == 'lit8' and i + 1 < n:
+            n2 = lines[i + 1]
+            if n2[0] == 'insn' and n2[1] == 'sub':
+                k = parse_int(args[0])
+                if -128 <= k <= 127:
+                    if k == 1:
+                        out.append(('insn', 'dec', []))
+                    else:
+                        out.append(('insn', 'subk', [str(k)]))
+                    i += 2; continue
+        out.append(lines[i]); i += 1
+    return out
+
 def main():
     argv = sys.argv[1:]
     out = None
@@ -59,7 +94,7 @@ def main():
         print(__doc__); sys.exit(1)
     src = argv[0]
 
-    lines = parse(src)
+    lines = peephole(parse(src))
     sp0 = 0x1000
     entry_name = None
     # 第一遍：标签 → 代码区偏移；算代码长度

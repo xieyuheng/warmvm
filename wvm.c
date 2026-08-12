@@ -19,7 +19,11 @@ enum {
     OP_AND, OP_OR, OP_XOR, OP_SHL, OP_SHR,
     OP_EQ, OP_NE, OP_LT, OP_GT, OP_LE, OP_GE,
     OP_LOAD, OP_STORE, OP_LOAD8, OP_STORE8, OP_LOAD16, OP_STORE16,
-    OP_JMP, OP_JZ, OP_JNZ, OP_CALL, OP_RET, OP_JMPX, OP_CALLX
+    OP_JMP, OP_JZ, OP_JNZ, OP_CALL, OP_RET, OP_JMPX, OP_CALLX,
+    /* 融合指令（peephole 生成） */
+    OP_DEC = 0x27,   /* lit8 1 sub：栈顶减 1 */
+    OP_DUPLE = 0x28, /* dup lit8 k le：dup + 与常量比较（带 i8 立即数） */
+    OP_SUBK = 0x29,  /* lit8 k sub：栈顶减常量（带 i8 立即数） */
 };
 
 int wvm_load(wvm_t *m, const void *file, size_t len) {
@@ -94,7 +98,8 @@ int wvm_run(wvm_t *m) {
         &&H_EQ,   &&H_NE,   &&H_LT,   &&H_GT,    &&H_LE, &&H_GE,
         &&H_LOAD, &&H_STORE,&&H_LOAD8,&&H_STORE8,&&H_LOAD16, &&H_STORE16,
         &&H_JMP,  &&H_JZ,   &&H_JNZ,  &&H_CALL,  &&H_RET, &&H_JMPX, &&H_CALLX,
-        [39 ... 63] = &&H_ILLEGAL
+        &&H_DEC,  &&H_DUPLE, &&H_SUBK,
+        [42 ... 63] = &&H_ILLEGAL
     };
 
     uint8_t _op;
@@ -149,6 +154,11 @@ H_CALL:  { uint32_t t = wvm_rd16(m, ip); ip += 2; PUSH_RET(ip); ip = t; goto FET
 H_RET:   { ip = POP_RET(); goto FETCH_D; }
 H_JMPX:  { ip = POP() & 0xFFFF; CHECK_ADDR(ip); goto FETCH_D; }
 H_CALLX: { uint32_t t = POP() & 0xFFFF; CHECK_ADDR(t); PUSH_RET(ip); ip = t; goto FETCH_D; }
+H_DEC:   { uint32_t v = wvm_rd32(m, sp); wvm_wr32(m, sp, v - 1); goto FETCH_D; }
+H_SUBK:  { int32_t k = (int8_t)wvm_rd8(m, ip); ip += 1;
+           uint32_t v = wvm_rd32(m, sp); wvm_wr32(m, sp, v - k); goto FETCH_D; }
+H_DUPLE: { int32_t k = (int8_t)wvm_rd8(m, ip); ip += 1;
+           int32_t x = (int32_t)wvm_rd32(m, sp); PUSH(x <= k ? 1 : 0); goto FETCH_D; }
 H_ILLEGAL: status = WVM_ERR_OPCODE; goto STOP;
 
 FETCH_D:
