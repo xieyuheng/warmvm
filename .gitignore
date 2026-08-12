@@ -1,0 +1,7 @@
+# 构建产物
+*.exe
+*.class
+*.o
+fib.wvm
+bench/fib40_c_O0
+bench/fib40_c_O2
