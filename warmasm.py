@@ -154,7 +154,8 @@ def main():
         code.append(op)
         if name in LIT_N:
             v = resolve_operand(args[0], eqs, labels, code_base)
-            code += int(v).to_bytes(LIT_N[name], 'little', signed=True)
+            signed = (name != 'lit32')   # lit32 无符号 (值语义)
+            code += int(v).to_bytes(LIT_N[name], 'little', signed=signed)
         elif name in BR_N:
             t = resolve_operand(args[0], eqs, labels, code_base)
             code += t.to_bytes(2, 'little')

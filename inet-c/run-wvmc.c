@@ -34,12 +34,32 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* 归约后 (add,zero) 的 connect 把 result 线替换为 addend 线,
-     * result 值不再出现在活 cell。对 nat 加法: 正规形 = add1 链,
-     * 验证 = 数 add1 块 (type 2) 的个数。 */
-    int count = 0;
-    for (uint32_t a = 0x4C00; a < 0x5C00; a += 16) {
-        if (rd32(&m, a) == 2) count++;
+    /* 线跟踪: 值 -> wire deref / 端口值 pc 读, 直到 agent 端口值或 int */
+    uint32_t v = result;
+    for (int i = 0; i < 16; i++) {
+        if ((v & 0xC0000000) == 0x40000000) { v = rd32(&m, v & 0x1FFFFFFF); continue; }
+        if (v & 0x80000000) break;                 /* int 值 */
+        uint32_t base = v >> 4, type = rd32(&m, base);
+        if (type == 0 || type > 15) break;
+        uint32_t nv = rd32(&m, base + ((v & 15) << 2) + 4);
+        if (nv == v) break;                        /* 自环 */
+        v = nv;
+    }
+    int count = 0, guard = 0;
+    while (guard++ < 100000) {
+        if (v & 0x80000000) { printf("int result: %d\n", (int)(v & 0x7FFFFFFF)); break; }
+        uint32_t base = v >> 4;
+        uint32_t type = rd32(&m, base);
+        if (type == 1) break;                      /* zero */
+        if (type == 2) {                           /* add1: prev */
+            count++;
+            v = rd32(&m, base + 8);
+            for (int i = 0; i < 16 && (v & 0xC0000000) == 0x40000000; i++)
+                v = rd32(&m, v & 0x1FFFFFFF);
+            continue;
+        }
+        printf("意外节点类型 %u at base 0x%x\n", type, base);
+        return 1;
     }
     printf("add1 count = %d\n", count);
     if (argc > 2 && count != atoi(argv[2])) {
