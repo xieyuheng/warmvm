@@ -10,6 +10,8 @@
 ;   reduce_entry: 驱动循环归约 T1 (宿主在导出后重新进入)
 ;   import_entry: 导入 T2 (alloc + 指针重映射 + 入队) → 驱动循环
 ;
+; DEPTHG: 宿主在每次导出/构建前写入深度 (默认 6)
+.eq DEPTHG 0x401C
 ; bundle 格式 (XBASE=0x6000):
 ;   [0] u32 n (agent 数)  [4] u32 pn (活跃对数)
 ;   [8..]   pair 表 (local idx, 最多 64 项)
@@ -43,7 +45,7 @@
 .eq T42 0x48A8
 
 .sp0 0x1000
-.entry main
+.entry export_entry
 
 ; ---------------- 基础子程序 ----------------
 
@@ -950,7 +952,8 @@ rule_end_zero:
 
 ; ---------------- 入口 ----------------
 
-main:
+export_entry:
+    ; 初始化 (自由表 + 全局)
     lit16 0
     lit16 FREE
     store
@@ -968,6 +971,9 @@ main:
     store
     lit16 0
     lit16 XCNT
+    store
+    lit16 0
+    lit16 XBASE+4
     store
     ; 自由表: 0x4AC0..0x5C00
     lit16 0x5C00
@@ -1020,27 +1026,9 @@ main:
     lit16 rule_end_add1
     lit16 T42
     store16
-    ; 构建 T1
-    lit16 DEPTH
-    call build_tree
-    lit16 SLOT+40
-    store
-    lit8 4
-    call newag
-    lit16 SLOT+44
-    store
-    ; root1.p2 <-> end1.p0
-    lit16 SLOT+40
-    load
-    lit8 2
-    call portv
-    lit16 SLOT+44
-    load
-    lit8 0
-    call portv
-    call connect
     ; 构建 T2 导出
-    lit16 DEPTH
+    lit16 DEPTHG
+    load
     call build_tree_x
     lit16 SLOT+48
     store
@@ -1069,6 +1057,103 @@ main:
     halt
 
 reduce_entry:
+    ; 初始化 (自由表 + 全局)
+    lit16 0
+    lit16 FREE
+    store
+    lit16 0
+    lit16 QHEAD
+    store
+    lit16 0
+    lit16 QTAIL
+    store
+    lit16 0
+    lit16 COUNT
+    store
+    lit16 0
+    lit16 ERR
+    store
+    lit16 0
+    lit16 XCNT
+    store
+    lit16 0
+    lit16 XBASE+4
+    store
+    ; 自由表: 0x4AC0..0x5C00
+    lit16 0x5C00
+    lit16 SLOT+36
+    store
+    lit16 AGENTS
+.rd_init_loop:
+    dup
+    lit16 16
+    add
+    dup
+    lit16 SLOT+36
+    load
+    lt
+    jz .rd_init_last
+    dup
+    rot
+    store
+    jmp .rd_init_loop
+.rd_init_last:
+    drop
+    lit16 0
+    swap
+    store
+    lit16 AGENTS
+    lit16 FREE
+    store
+    ; 规则表
+    lit16 rule_add_zero
+    lit16 T13
+    store16
+    lit16 rule_add_zero
+    lit16 T31
+    store16
+    lit16 rule_add_add1
+    lit16 T23
+    store16
+    lit16 rule_add_add1
+    lit16 T32
+    store16
+    lit16 rule_end_zero
+    lit16 T14
+    store16
+    lit16 rule_end_zero
+    lit16 T41
+    store16
+    lit16 rule_end_add1
+    lit16 T24
+    store16
+    lit16 rule_end_add1
+    lit16 T42
+    store16
+    ; 构建 T1
+    lit16 DEPTHG
+    load
+    call build_tree
+    lit16 SLOT+40
+    store
+    lit8 4
+    call newag
+    lit16 SLOT+44
+    store
+    ; root1.p2 <-> end1.p0
+    lit16 SLOT+40
+    load
+    lit8 2
+    call portv
+    lit16 SLOT+44
+    load
+    lit8 0
+    call portv
+    call connect
+    ; 初始活跃对: root1
+    lit16 SLOT+40
+    load
+    call enq
     jmp .driver
 
 import_entry:

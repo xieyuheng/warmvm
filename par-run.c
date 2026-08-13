@@ -1,7 +1,8 @@
-/* par-run —— 双 warmvm 并行验证
- * VM0: main(构建 T1 + 导出 T2) → 宿主搬运 bundle → reduce(T1)
- * VM1: import(T2) + reduce
- * 正确性: count0 + count1 == 128 (2 × 64 叶)
+/* par-run —— 4 warmvm 并行验证
+ * 阶段 1 (顺序): VM0 export_entry 循环 3 次 (宿主写 DEPTHG: 6,5,4)
+ *   → 导出 T2(64 叶)/T3(32 叶)/T4(16 叶), 每次 halt(EXPORT) 后宿主搬运
+ * 阶段 2 (并行): VM0 reduce(T1=64 叶) + VM1/2/3 import(T2/T3/T4) 同时归约
+ * 正确性: count0+count1+count2+count3 == 64+64+32+16 = 176
  */
 #define _GNU_SOURCE
 #include "wvm.h"
@@ -16,13 +17,15 @@
 #include <sys/ioctl.h>
 #include <linux/perf_event.h>
 
-#define ENTRY_MAIN    0x155E
-#define ENTRY_REDUCE  0x164A
-#define ENTRY_IMPORT  0x164D
+#define ENTRY_EXPORT  0x155E
+#define ENTRY_REDUCE  0x162A
+#define ENTRY_IMPORT  0x16F1
 #define XBASE         0x6000
 #define XREC          0x6108
 #define CB_ERR        0x4010
 #define CB_COUNT      0x400C
+#define CB_DEPTHG     0x401C
+#define NVM 4
 
 typedef struct {
     wvm_t *m;
@@ -82,47 +85,54 @@ int main(void) {
     size_t flen = fread(file, 1, sizeof(file), f);
     fclose(f);
 
-    wvm_t *m0 = calloc(1, sizeof(*m0));
-    wvm_t *m1 = calloc(1, sizeof(*m1));
+    wvm_t *m[NVM];
+    for (int i = 0; i < NVM; i++) {
+        m[i] = calloc(1, sizeof(wvm_t));
+        wvm_load(m[i], file, flen);
+    }
 
-    /* 阶段 1: VM0 构建 + 导出 (顺序) */
-    wvm_load(m0, file, flen);
-    wvm_wr16(m0, WVM_CB_ENTRY, ENTRY_MAIN);
-    double t0 = now_ms();
-    wvm_run(m0);
-    double build_ms = now_ms() - t0;
-    uint32_t err = wvm_rd32(m0, CB_ERR);
-    uint32_t n = wvm_rd32(m0, XBASE);
-    uint32_t pn = wvm_rd32(m0, XBASE + 4);
-    printf("VM0 build+export: err=%u n=%u pairs=%u (%.2f ms)\n", err, n, pn, build_ms);
-    if (err != 1) { fprintf(stderr, "EXPECT err=1 (EXPORT), got %u\n", err); return 1; }
+    /* 阶段 1: VM0 依次导出 T2/T3/T4 (depth 6,5,4) */
+    static const uint32_t depth[NVM - 1] = { 6, 5, 4 };
+    static const uint32_t leaves[NVM - 1] = { 64, 32, 16 };
+    size_t blen = 0;
+    for (int i = 0; i < NVM - 1; i++) {
+        wvm_wr32(m[0], CB_DEPTHG, depth[i]);
+        wvm_wr16(m[0], WVM_CB_ENTRY, ENTRY_EXPORT);
+        wvm_run(m[0]);
+        uint32_t err = wvm_rd32(m[0], CB_ERR);
+        uint32_t n = wvm_rd32(m[0], XBASE);
+        uint32_t pn = wvm_rd32(m[0], XBASE + 4);
+        if (err != 1) { fprintf(stderr, "export %d: EXPECT err=1, got %u\n", i, err); return 1; }
+        blen = XREC - XBASE + (size_t)n * 16;
+        memcpy((uint8_t *)m[i + 1]->mem + XBASE, (uint8_t *)m[0]->mem + XBASE, blen);
+        printf("VM0 export T%d: depth=%u n=%u pairs=%u (%zu B)\n", i + 2, depth[i], n, pn, blen);
+    }
 
-    /* 阶段 2: 宿主搬运 bundle 到 VM1 */
-    wvm_load(m1, file, flen);   /* 先加载程序 */
-    size_t blen = XREC - XBASE + (size_t)n * 16;
-    memcpy((uint8_t *)m1->mem + XBASE, (uint8_t *)m0->mem + XBASE, blen);
-    printf("bundle copied: %zu bytes\n", blen);
-
-    /* 阶段 3: 并行 (两个线程) */
-    job_t j0 = { m0, file, flen, ENTRY_REDUCE, 0, 0, 0, 0 };
-    job_t j1 = { m1, file, flen, ENTRY_IMPORT, 4, 0, 0, 0 };
-    pthread_t th0, th1;
+    /* 阶段 2: 4 线程并行归约 */
+    wvm_wr32(m[0], CB_DEPTHG, 6);   /* T1 = 64 叶 */
+    job_t j[NVM];
+    j[0] = (job_t){ m[0], file, flen, ENTRY_REDUCE, 0, 0, 0, 0 };
+    j[1] = (job_t){ m[1], file, flen, ENTRY_IMPORT, 4, 0, 0, 0 };
+    j[2] = (job_t){ m[2], file, flen, ENTRY_IMPORT, 6, 0, 0, 0 };
+    j[3] = (job_t){ m[3], file, flen, ENTRY_IMPORT, 8, 0, 0, 0 };
+    pthread_t th[NVM];
     double tp0 = now_ms();
-    pthread_create(&th0, NULL, worker_thread, &j0);
-    pthread_create(&th1, NULL, worker_thread, &j1);
-    pthread_join(th0, NULL);
-    pthread_join(th1, NULL);
+    for (int i = 0; i < NVM; i++)
+        pthread_create(&th[i], NULL, worker_thread, &j[i]);
+    for (int i = 0; i < NVM; i++)
+        pthread_join(th[i], NULL);
     double par_ms = now_ms() - tp0;
 
-    uint32_t c0 = wvm_rd32(m0, CB_COUNT);
-    uint32_t c1 = wvm_rd32(m1, CB_COUNT);
-    printf("VM0 (reduce T1): count=%u  %.2f ms  L1d miss=%lld L1i miss=%lld\n",
-           c0, j0.ms, j0.l1d_miss, j0.l1i_miss);
-    printf("VM1 (import T2): count=%u  %.2f ms  L1d miss=%lld L1i miss=%lld\n",
-           c1, j1.ms, j1.l1d_miss, j1.l1i_miss);
-    printf("parallel phase: %.2f ms (max %.2f)\n", par_ms,
-           j0.ms > j1.ms ? j0.ms : j1.ms);
-    printf("total: count0+count1 = %u (expect 128) %s\n", c0 + c1,
-           c0 + c1 == 128 ? "OK" : "FAIL");
-    return c0 + c1 == 128 ? 0 : 1;
+    static const char *name[NVM] = { "VM0 reduce T1(64)", "VM1 import T2(64)", "VM2 import T3(32)", "VM3 import T4(16)" };
+    uint32_t total = 0, expect = 176, maxc = 0;
+    for (int i = 0; i < NVM; i++) {
+        uint32_t c = wvm_rd32(m[i], CB_COUNT);
+        total += c;
+        if (j[i].ms > maxc) maxc = j[i].ms;
+        printf("%-17s count=%2u  %6.2f ms  L1d miss=%lld L1i miss=%lld\n",
+               name[i], c, j[i].ms, j[i].l1d_miss, j[i].l1i_miss);
+    }
+    printf("parallel phase: %.2f ms (max %.2f)\n", par_ms, maxc / 1.0);
+    printf("total: %u (expect %u) %s\n", total, expect, total == expect ? "OK" : "FAIL");
+    return total == expect ? 0 : 1;
 }
