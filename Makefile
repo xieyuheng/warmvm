@@ -36,3 +36,25 @@ inet-par.wvm: inet-par.asm warmasm.py
 
 par-run.exe: par-run.c wvm.c wvm.h
 	$(CC) $(CFLAGS) -pthread -o $@ par-run.c wvm.c
+
+# ---- inet-lisp 前端 (inet-c/) ----
+HELPERS := $(wildcard inet-c/helpers/*/*.c) $(wildcard inet-c/value/*.c)
+LANG    := $(wildcard inet-c/lang/*.c)
+INETC_CFLAGS := -O2 -Iinet-c -I.
+
+inet-c/wvmc.exe: inet-c/wvmc_main.c inet-c/compile_wvm.c $(LANG) $(HELPERS)
+	$(CC) $(INETC_CFLAGS) -o $@ $^ -lm
+
+inet-c/run-wvmc.exe: inet-c/run-wvmc.c wvm.c wvm.h
+	$(CC) -O2 -I. -o $@ $^
+
+demo-nat: inet-c/wvmc.exe inet-c/run-wvmc.exe
+	WARMVM_DIR=$(CURDIR) ./inet-c/wvmc.exe /tmp/nat-demo.lisp /tmp/nat-demo.wvm
+	./inet-c/run-wvmc.exe /tmp/nat-demo.wvm 3
+
+demo-mul: inet-c/wvmc.exe inet-c/run-wvmc.exe
+	WARMVM_DIR=$(CURDIR) ./inet-c/wvmc.exe /tmp/nat-mul.lisp /tmp/nat-mul.wvm
+	./inet-c/run-wvmc.exe /tmp/nat-mul.wvm 6
+
+demo-par: par-run.exe
+	./par-run.exe

@@ -128,3 +128,34 @@ total: 128 (expect 128) OK
 bundle 格式：`[n][pn][pairs...][records...]`，本地索引 1-based（0 = 无连线）。
 导入端：pass-1 分配 + map 重映射，pass-2 端口 remap（`(map[v>>4-1]<<4)|(v&15)`），
 pairs 入队 → 驱动循环。规则/驱动/队列/自由表全部在 VM 内，宿主只做一次 memcpy。
+
+## inet-lisp 语法前端（inet-c/）
+
+把 inet-lisp（projects/xieyuheng/inet-lisp）的解析层整体复制过来，写了一个新的后端编译器：
+
+```
+.lisp ──► inet-c/ (复制的 lexer/sexp/parser) ──► compile_wvm.c ──► .asm ──► warmasm.py ──► .wvm
+```
+
+- **wvmc.exe**：AST → warmvm 汇编（两遍，复用 warmasm.py）
+- 语义映射：agent = 16B 块 [type,p0,p1,p2]，端口值 (base<<4)|port（编码端口 0=principal，
+  任意声明位置），TABLE[(F<<4)|G] 双向填表，规则 handler 按类型 swap 规范化
+- 支持：define-node / define-rule / define（0 参函数）/ define-function（warmvm 子程序，
+  栈传参）、规则体 connect / 节点应用 / (= x y (f ...)) 赋值
+- v1 限制：无 import/define-rule*/数字字面量/apply-wire（报错提示）
+- 内存布局：QUEUE 0x4024 / TABLE 0x4824 / SCR 0x4A24 / CSLOT 0x4A4C / VARS 0x4A5C /
+  AGENTS 0x4C00（105 个变量槽）
+
+验证：
+```
+$ make demo-nat   # (add (one) (two)) → add1 count = 3 OK
+$ make demo-mul   # (mul (two) (three)) → add1 count = 6 OK  (6 条规则)
+$ perf: 2000 次完整归约 10.6 us/run, L1d/L1i miss 各 2 次 (总数)
+```
+
+调试中修掉的编译器 bug（每类都对应一个语义陷阱）：
+- principal 端口可出现在任意声明位置 → 编码端口重排 (enc[])
+- 模式变量绑定的值是"线的对端"，端口位运行时才可知 → 运行时 enq 检查
+- apply 参数数 = arity 时仍要 alloc+连接（不能只求值参数）
+- 变量槽与引擎临时槽 (SCR+36) 重叠 → 布局隔离
+- 函数嵌套调用 → 槽递增分配不复用
